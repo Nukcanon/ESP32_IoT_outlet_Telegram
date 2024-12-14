@@ -1,0 +1,12 @@
+{
+  "name": "ESP32-CAM_motion_detection_telegram",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "ESP32_IoT_outlet_Telegram_version.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
