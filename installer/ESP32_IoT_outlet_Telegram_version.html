@@ -25,17 +25,14 @@
 			<div style="line-height:2.0em">
 			    <ol>
 			        <li>ESP32를 flashing 모드로 설정한 뒤 컴퓨터와 연결합니다.
-			            <br><strong>flashing 모드 진입 방법 예시(ESP32 Dev Module 기준):</strong>
-			            <br>방법 1) BOOT 버튼을 활용한 일반적 진입:
-			            <br>- 전원을 연결한 상태에서 BOOT 버튼을 누르고 있습니다.
-			            <br>- BOOT 버튼을 누른 상태에서 EN(또는 Reset) 버튼을 한 번 눌렀다 떼면, ESP32는 BOOT 핀이 LOW 상태임을 감지하고 부트로더(flashing 모드)로 진입합니다.
-			            <br>- 이 시점에서 업로드가 시작될 때까지 BOOT 버튼을 계속 누르고 있다가, 업로드 툴(esp-web-tools 등)이 ESP32와 통신을 시작하면 BOOT 버튼에서 손을 떼도 됩니다.
-			
-			            <br><br>방법 2) BOOT 버튼 누르고 떼는 방식:
-			            <br>- 전원을 연결한 상태에서 BOOT 버튼을 누른 채 EN(또는 Reset) 버튼을 눌렀다 떼면 flashing 모드에 진입합니다.
-			            <br>- 이 경우 EN 버튼을 떼고 잠시 후 BOOT 버튼을 놓아도 flashing 모드가 유지됩니다.
-			            
-			            <br>전용 프로그래머 보드를 사용하는 경우 해당 보드의 사용 설명서에 따라 flashing 모드로 진입하십시오.
+			            <br><strong>flashing 모드 진입 방법(ESP32 Dev Module 기준)</strong>
+			            <br>방법1) BOOT 버튼을 활용한 일반적 진입
+			            <br>  -전원을 연결한 상태에서 BOOT 버튼을 누르고 있습니다.
+			            <br>  -BOOT 버튼을 누른 상태에서 EN(또는 Reset) 버튼을 한 번 눌렀다 떼면, ESP32는 BOOT 핀이 LOW 상태임을 감지하고 부트로더(flashing 모드)로 진입합니다.
+			            <br>  -이 시점에서 업로드가 시작될 때까지 BOOT 버튼을 계속 누르고 있다가, 업로드 툴(esp-web-tools 등)이 ESP32와 통신을 시작하면 BOOT 버튼에서 손을 떼도 됩니다.
+			            <br>방법2) BOOT 버튼 누르고 떼는 방식
+			            <br>  -전원을 연결한 상태에서 BOOT 버튼을 누른 채 EN(또는 Reset) 버튼을 눌렀다 떼면 flashing 모드에 진입합니다.
+			            <br>  -이 경우 EN 버튼을 떼고 잠시 후 BOOT 버튼을 놓아도 flashing 모드가 유지됩니다.
 			        </li>
 			        <li>다른 ESP32 관련 프로그램(Arduino IDE 등)을 모두 종료합니다.
 			            <br>특히 Arduino IDE의 시리얼 모니터가 켜져 있으면 업로드가 불가능합니다.</li>
