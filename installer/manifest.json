@@ -1,5 +1,5 @@
 {
-  "name": "ESP32-CAM_motion_detection_telegram",
+  "name": "ESP32_IoT_outlet_Telegram/",
   "new_install_prompt_erase": false,
   "builds": [
     {
