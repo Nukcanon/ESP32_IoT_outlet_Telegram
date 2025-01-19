@@ -12,8 +12,8 @@
 extern const char TELEGRAM_CERTIFICATE_ROOT[] PROGMEM;
 
 #define SERVO_PIN 4
-#define SERVO_ON_ANGLE 80
-#define SERVO_OFF_ANGLE 110
+#define SERVO_ON_ANGLE 120
+#define SERVO_OFF_ANGLE 80
 
 struct eprom_data {
   char wifi_ssid[32];
@@ -39,8 +39,8 @@ Servo myServo;
 
 int servoOnAngle = SERVO_ON_ANGLE;
 int servoOffAngle = SERVO_OFF_ANGLE;
-int currentAngle = 110;
-int desiredAngle = 110;
+int currentAngle = 100;
+int desiredAngle = 100;
 
 bool awaitingOnAngle = false;
 bool awaitingOffAngle = false;
@@ -296,7 +296,27 @@ bool init_wifi(){
       Serial.println("[WiFi] EEPROM 정보로 연결 성공!");
       wifiConnected=true;
     } else {
-      Serial.println("[WiFi] EEPROM 정보 실패. WiFiManager 전환.");
+      Serial.println("[Main] 초기 설정 필요. Serial(y/n)?(10초)");
+      unsigned long st=millis();
+      bool useSerial=false;
+      while(millis()-st<10000){
+        if(Serial.available()){
+          char c=(char)Serial.read();
+          if(c=='y'||c=='Y'){useSerial=true;break;}
+          else break;
+        }
+        delay(100);
+      }
+
+      if(useSerial){
+        if(!enterWiFiAndTelegramCredentials()){
+          Serial.println("[Main] 시리얼 실패. WiFiManager.");
+        } else {
+          if(WiFi.status()==WL_CONNECTED) wifiConnected=true;
+        }
+      } else {
+        Serial.println("[Main] 시리얼 모드 안함. WiFiManager.");
+      }
     }
   } else {
     Serial.println("[Main] 초기 설정 필요. Serial(y/n)?(10초)");
@@ -372,17 +392,54 @@ bool init_wifi(){
         delay(1000);
       }
     }
-
     if(!botInit) {
-      Serial.println("[Telegram] 봇 초기화 실패. 루트 인증서 입력유도.");
-      enterTelegramRootCert();
+      Serial.println("[Telegram] 봇 초기화 실패. 정보 다시 입력.");
+      Serial.println("[Main] 초기 설정 필요. Serial(y/n)?(10초)");
+      unsigned long st=millis();
+      bool useSerial=false;
+      while(millis()-st<10000){
+        if(Serial.available()){
+          char c=(char)Serial.read();
+          if(c=='y'||c=='Y'){useSerial=true;break;}
+          else break;
+        }
+        delay(100);
+      }
+
+      if(useSerial){
+        if(!enterWiFiAndTelegramCredentials()){
+          Serial.println("[Main] 시리얼 실패. WiFiManager.");
+        } else {
+          if(WiFi.status()==WL_CONNECTED) wifiConnected=true;
+        }
+      } else {
+        Serial.println("[Main] 시리얼 모드 안함. WiFiManager.");
+      }
     }
   } else {
-    Serial.println("[Main] WiFi 연결 안됨. 재부팅...");
-    delay(1000);
-    ESP.restart();
-  }
+    Serial.println("[Main] WiFi 연결 안됨. 정보 다시 입력.");
+    Serial.println("[Main] 초기 설정 필요. Serial(y/n)?(10초)");
+    unsigned long st=millis();
+    bool useSerial=false;
+    while(millis()-st<10000){
+      if(Serial.available()){
+        char c=(char)Serial.read();
+        if(c=='y'||c=='Y'){useSerial=true;break;}
+        else break;
+      }
+        delay(100);
+      }
 
+    if(useSerial){
+      if(!enterWiFiAndTelegramCredentials()){
+        Serial.println("[Main] 시리얼 실패. WiFiManager.");
+      } else {
+        if(WiFi.status()==WL_CONNECTED) wifiConnected=true;
+      }
+    } else {
+      Serial.println("[Main] 시리얼 모드 안함. WiFiManager.");
+    }
+  }
   return (WiFi.status()==WL_CONNECTED);
 }
 
@@ -481,7 +538,7 @@ void handleNewMessages(int numNewMessages){
 }
 
 void Comm_Task(void *pvParameters) {
-  for(;;){
+  while(1){
     if(bot && WiFi.status()==WL_CONNECTED){
       unsigned long now=millis();
       if(now > lastTimeBotRan + botRequestDelay){
@@ -506,6 +563,7 @@ void Comm_Task(void *pvParameters) {
       String cmd=Serial.readStringUntil('\n');
       cmd.trim();
       if(cmd.equalsIgnoreCase("reset")){
+        Serial.println("[Main] reset 명령 수신 -> EEPROM 및 WiFi 설정 초기화 후 재부팅");
         resetSettings();
       }
     }
@@ -516,22 +574,21 @@ void Comm_Task(void *pvParameters) {
 }
 
 void Servo_Task(void *pvParameters) {
-  myServo.attach(SERVO_PIN);
-  myServo.write(currentAngle);
-
-  for(;;){
+  while(1){
     xSemaphoreTake(xMutex, portMAX_DELAY);
     int angleCopy = desiredAngle;
     xSemaphoreGive(xMutex);
 
     if(angleCopy != currentAngle){
       currentAngle = angleCopy;
-      myServo.write(currentAngle);
-      Serial.printf("[Servo_Task] 서보 각도 변경: %d\n", currentAngle);
-      delay(500); 
+      myServo.write(angleCopy);
+      myServo.attach(SERVO_PIN);
+      myServo.write(angleCopy);
+      delay(500);
+      Serial.printf("[Servo_Task] 서보 각도 변경: %d\n", angleCopy);
     }
-
     vTaskDelay(50 / portTICK_PERIOD_MS);
+    myServo.detach();
   }
   vTaskDelete(NULL);
 }
@@ -548,10 +605,11 @@ void setup(){
   xMutex = xSemaphoreCreateMutex();
 
   init_wifi();
+  myServo.attach(SERVO_PIN);
 
   xSemaphoreTake(xMutex, portMAX_DELAY);
-  currentAngle = servoOffAngle;
-  desiredAngle = servoOffAngle;
+  currentAngle = 100;
+  desiredAngle = 100;
   xSemaphoreGive(xMutex);
 
   xTaskCreatePinnedToCore(
