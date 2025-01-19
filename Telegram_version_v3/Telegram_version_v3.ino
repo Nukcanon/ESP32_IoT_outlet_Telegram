@@ -677,8 +677,9 @@ void Servo_Task(void *pvParameters) {
 
 void setup(){
   Serial.begin(115200);
-  delay(1000);
   Serial.println("[Main] ESP32 스위치 컨트롤러 시작...");
+  Serial.println("\n사용 가능한 명령어:");
+  Serial.println("  RESET - 기본 설정으로 재설정");
 
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG,0);
   EEPROM.begin(sizeof(eprom_data));
