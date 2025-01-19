@@ -7,6 +7,7 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include <ESP32Servo.h>
+#include <esp_mac.h>
 
 // Telegram 루트 인증서 (실제 PEM 필요)
 extern const char TELEGRAM_CERTIFICATE_ROOT[] PROGMEM;
@@ -14,6 +15,9 @@ extern const char TELEGRAM_CERTIFICATE_ROOT[] PROGMEM;
 #define SERVO_PIN 4
 #define SERVO_ON_ANGLE 120
 #define SERVO_OFF_ANGLE 80
+
+// AP 이름 최대 크기
+#define AP_NAME_SIZE 32
 
 struct eprom_data {
   char wifi_ssid[32];
@@ -24,6 +28,8 @@ struct eprom_data {
   int eprom_good;
   int servo_on_angle;
   int servo_off_angle;
+  // ***** 추가: AP 이름 저장용 필드 *****
+  char ap_name[AP_NAME_SIZE];
 };
 
 const int CheckNumber = 123;
@@ -48,38 +54,85 @@ bool awaitingOffAngle = false;
 unsigned long botRequestDelay = 1000;
 unsigned long lastTimeBotRan = 0;
 
-String randomNum = String(esp_random());
-String devstr = "ESP32-" + randomNum.substring(0,4);
-
-SemaphoreHandle_t xMutex;
-
-// offset 사용
+// 메시지 처리 offset
 int offset = 0;
 
 // 메시지 전송 관리 변수
-int messageneed = 0;             // 0: 전송 필요없음, 1: 전송 필요
-String pendingMessageText = "";  // 전송할 메시지 내용
-String pendingMessageChatId = ""; 
+int messageneed = 0;             
+String pendingMessageText = "";  
+String pendingMessageChatId = "";
+
+// ***** 추가: AP 이름 관리 *****
+String devstr;  // WiFiManager용 AP 이름 (실행 시점에 ed.ap_name에서 가져옴)
+
+// ----------------------------------------------------------------------------
+// MAC 기반 AP SSID 생성 (실패 시 랜덤값)
+// ----------------------------------------------------------------------------
+void generateAPSSID(char* outName, size_t size) {
+  uint32_t rand_num = esp_random();
+  int randomNumber = (rand_num % 9000) + 1000; // 1000 ~ 9999
+  String tmp = "ESP32-" + String(randomNumber);
+
+  // outName에 저장
+  strncpy(outName, tmp.c_str(), size - 1);
+  outName[size - 1] = '\0';
+
+  Serial.print("랜덤 4자리 AP SSID 생성: ");
+  Serial.println(outName);
+}
+
+void setAPSSIDwithMAC(char* outName, size_t size) {
+  // MAC 주소를 담을 배열 (6바이트)
+  uint8_t mac[6] = {0};
+  // ESP32의 기본 MAC 주소를 읽어옴
+  esp_err_t ret = esp_efuse_mac_get_default(mac);
+  Serial.print("esp_efuse_mac_get_default() 반환값: ");
+  Serial.println(ret);
+
+  if (ret == ESP_OK) {
+    // MAC 주소 마지막 2바이트(예: mac[4], mac[5])만 사용 -> 4자리 16진수
+    char macLast4[5];
+    sprintf(macLast4, "%02X%02X", mac[4], mac[5]);
+    // 예: mac[4] = 0xAB, mac[5] = 0xCD => "ABCD"
+
+    String newSSID = "ESP32-" + String(macLast4);
+
+    // outName에 복사
+    strncpy(outName, newSSID.c_str(), size - 1);
+    outName[size - 1] = '\0';
+
+    Serial.print("MAC 기반 AP SSID 생성: ");
+    Serial.println(outName);
+  } else {
+    Serial.println("MAC 주소 읽기 실패 -> 랜덤 4자리 생성");
+    generateAPSSID(outName, size);
+  }
+}
+// ----------------------------------------------------------------------------
+
 
 bool isDataDifferent(const eprom_data &newData, const eprom_data &oldData){
-  if(newData.eprom_good!=oldData.eprom_good)return true;
-  if(strcmp(newData.wifi_ssid,oldData.wifi_ssid)!=0)return true;
-  if(strcmp(newData.wifi_password,oldData.wifi_password)!=0)return true;
-  if(strcmp(newData.telegram_id,oldData.telegram_id)!=0)return true;
-  if(strcmp(newData.telegram_token,oldData.telegram_token)!=0)return true;
-  if(strcmp(newData.telegram_root_cert,oldData.telegram_root_cert)!=0)return true;
-  if(newData.servo_on_angle != oldData.servo_on_angle)return true;
-  if(newData.servo_off_angle != oldData.servo_off_angle)return true;
+  if(newData.eprom_good != oldData.eprom_good) return true;
+  if(strcmp(newData.wifi_ssid, oldData.wifi_ssid) != 0) return true;
+  if(strcmp(newData.wifi_password, oldData.wifi_password) != 0) return true;
+  if(strcmp(newData.telegram_id, oldData.telegram_id) != 0) return true;
+  if(strcmp(newData.telegram_token, oldData.telegram_token) != 0) return true;
+  if(strcmp(newData.telegram_root_cert, oldData.telegram_root_cert) != 0) return true;
+  if(newData.servo_on_angle != oldData.servo_on_angle) return true;
+  if(newData.servo_off_angle != oldData.servo_off_angle) return true;
+  // ***** AP 이름 필드 비교 추가 *****
+  if(strcmp(newData.ap_name, oldData.ap_name) != 0) return true;
+
   return false;
 }
 
 void do_eprom_write(const eprom_data &newData){
   eprom_data currentData;
   EEPROM.begin(sizeof(eprom_data));
-  EEPROM.get(0,currentData);
+  EEPROM.get(0, currentData);
   EEPROM.end();
 
-  if(isDataDifferent(newData,currentData)){
+  if(isDataDifferent(newData, currentData)){
     Serial.println("[EEPROM] 데이터 변경 감지. 저장...");
     EEPROM.begin(sizeof(eprom_data));
     EEPROM.put(0,newData);
@@ -91,29 +144,41 @@ void do_eprom_write(const eprom_data &newData){
 
 void do_eprom_read(eprom_data &eed){
   EEPROM.begin(sizeof(eprom_data));
-  EEPROM.get(0,eed);
+  EEPROM.get(0, eed);
   EEPROM.end();
 
-  if(eed.eprom_good==CheckNumber){
+  if(eed.eprom_good == CheckNumber){
+    // 기존 로직: 서보 각도가 0이면 기본값으로
     if(eed.servo_on_angle == 0 && eed.servo_off_angle == 0) {
       eed.servo_on_angle = SERVO_ON_ANGLE;
       eed.servo_off_angle = SERVO_OFF_ANGLE;
       do_eprom_write(eed);
     }
+    
+    // **추가된 로직**: ap_name이 "ESP32-"로 시작하지 않으면 다시 생성
+    if (strncmp(eed.ap_name, "ESP32-", 6) != 0) {
+      Serial.println("[EEPROM] AP 이름이 'ESP32-'로 시작하지 않음. 새로 생성.");
+      setAPSSIDwithMAC(eed.ap_name, sizeof(eed.ap_name));
+      do_eprom_write(eed);
+    }
+    
   } else {
     Serial.println("[EEPROM] 유효한 설정 없음. 초기화.");
-    memset(&eed,0,sizeof(eed));
-    eed.eprom_good=CheckNumber;
+    memset(&eed, 0, sizeof(eed));
+    eed.eprom_good = CheckNumber;
     eed.servo_on_angle = SERVO_ON_ANGLE;
     eed.servo_off_angle = SERVO_OFF_ANGLE;
+
+    // CheckNumber가 유효하지 않은 경우, 새로 생성
+    setAPSSIDwithMAC(eed.ap_name, sizeof(eed.ap_name));
     do_eprom_write(eed);
   }
 }
 
 void resetSettings(){
   eprom_data emptyData;
-  memset(&emptyData,0,sizeof(emptyData));
-  emptyData.eprom_good=0;
+  memset(&emptyData, 0, sizeof(emptyData));
+  emptyData.eprom_good = 0;
   do_eprom_write(emptyData);
   Serial.println("[EEPROM] 설정 초기화 완료.");
 
@@ -130,18 +195,18 @@ void enterTelegramRootCert(){
     if(Serial.available()){
       String line=Serial.readStringUntil('\n');
       line.trim();
-      if(line.equalsIgnoreCase("END"))break;
-      cert+=line+"\n";
+      if(line.equalsIgnoreCase("END")) break;
+      cert += line + "\n";
       Serial.println("[CERT] 인증서 수신...");
     }
     delay(100);
   }
 
-  if(cert.length()>0){
+  if(cert.length() > 0){
     eprom_data newEd;
     do_eprom_read(newEd);
-    strncpy(newEd.telegram_root_cert,cert.c_str(),sizeof(newEd.telegram_root_cert)-1);
-    newEd.telegram_root_cert[sizeof(newEd.telegram_root_cert)-1]='\0';
+    strncpy(newEd.telegram_root_cert, cert.c_str(), sizeof(newEd.telegram_root_cert) - 1);
+    newEd.telegram_root_cert[sizeof(newEd.telegram_root_cert) - 1] = '\0';
     do_eprom_write(newEd);
     Serial.println("[CERT] 루트 인증서 저장 완료. 재시작.");
     ESP.restart();
@@ -224,10 +289,16 @@ bool enterWiFiAndTelegramCredentials(){
     newEd.servo_off_angle = SERVO_OFF_ANGLE;
   }
 
+  // ***** 만약 ap_name이 비어있다면 MAC 기반으로 생성 후 저장 *****
+  if(strlen(newEd.ap_name) == 0) {
+    setAPSSIDwithMAC(newEd.ap_name, sizeof(newEd.ap_name));
+  }
+
   do_eprom_write(newEd);
   ed=newEd;
   Serial.println("[SETUP] 설정 저장 완료.");
 
+  // WiFi 연결 시도
   WiFi.begin(ed.wifi_ssid,ed.wifi_password);
   unsigned long start=millis();
   while(WiFi.status()!=WL_CONNECTED && millis()-start<10000){
@@ -272,18 +343,33 @@ void saveParamCallback(){
     newEd.servo_off_angle = SERVO_OFF_ANGLE;
   }
 
+  // ***** ap_name은 이미 저장되어 있을 것으로 간주 *****
+
   if(updated) do_eprom_write(newEd);
   ed=newEd;
   Serial.println("[WiFiManager] 설정 저장 완료.");
 }
 
 bool init_wifi(){
+  // EEPROM에서 읽기
   do_eprom_read(ed);
 
   servoOnAngle = ed.servo_on_angle;
   servoOffAngle = ed.servo_off_angle;
 
-  bool haveCred=(strlen(ed.wifi_ssid)>0 && strlen(ed.wifi_password)>0 && strlen(ed.telegram_id)>0 && strlen(ed.telegram_token)>0);
+  // ***** AP 이름 세팅 로직 *****
+  if(strlen(ed.ap_name) == 0) {
+    // eeprom에 ap_name이 없다면 생성
+    setAPSSIDwithMAC(ed.ap_name, sizeof(ed.ap_name));
+    do_eprom_write(ed);
+  }
+  // 전역 String devstr에 저장
+  devstr = String(ed.ap_name);
+  Serial.print("[Main] AP Name: ");
+  Serial.println(devstr);
+
+  bool haveCred=(strlen(ed.wifi_ssid)>0 && strlen(ed.wifi_password)>0 
+                 && strlen(ed.telegram_id)>0 && strlen(ed.telegram_token)>0);
   bool wifiConnected=false;
 
   if(haveCred){
@@ -356,6 +442,7 @@ bool init_wifi(){
     wm.setConfigPortalTimeout(300);
 
     Serial.println("[WiFiManager] 포털 진입...");
+    // ***** 여기서 devstr.c_str()는 eeprom의 ap_name을 사용함 *****
     if(!wm.autoConnect(devstr.c_str())){
       Serial.println("[WiFiManager] 연결 실패. 재부팅...");
       delay(1000);
@@ -366,8 +453,8 @@ bool init_wifi(){
   }
 
   if(WiFi.status()==WL_CONNECTED){
-    telegramBotToken=String(ed.telegram_token);
-    telegramChatId=String(ed.telegram_id);
+    telegramBotToken = String(ed.telegram_token);
+    telegramChatId   = String(ed.telegram_id);
     if(strlen(ed.telegram_root_cert)>0) {
       clientTCP.setCACert(ed.telegram_root_cert);
       Serial.println("[Telegram] EEPROM 루트 인증서 사용.");
@@ -377,12 +464,11 @@ bool init_wifi(){
     }
 
     bool botInit=false;
-    for(int i=0;i<3&&!botInit;i++){
+    for(int i=0;i<3 && !botInit;i++){
       bot=new UniversalTelegramBot(telegramBotToken,clientTCP);
       if(bot->getMe()){
         Serial.println("[Telegram] 봇 초기화 성공.");
         botInit=true;
-        // 메시지도 messageneed방식으로 보내도 되지만 여기서는 첫 메시지는 한번만!
         pendingMessageText = "스위치 원격제어\n명령어:\n/on - 스위치ON(현재ON각도:"+String(servoOnAngle)+")\n/off - 스위치OFF(현재OFF각도:"+String(servoOffAngle)+")\n/set_on - ON각도 설정\n/set_off - OFF각도 설정\n/start - 메뉴 다시보기\n";
         pendingMessageChatId = telegramChatId;
         messageneed = 1;
@@ -428,7 +514,7 @@ bool init_wifi(){
         else break;
       }
         delay(100);
-      }
+    }
 
     if(useSerial){
       if(!enterWiFiAndTelegramCredentials()){
@@ -443,6 +529,7 @@ bool init_wifi(){
   return (WiFi.status()==WL_CONNECTED);
 }
 
+SemaphoreHandle_t xMutex;
 
 void handleNewMessages(int numNewMessages){
   int highestUpdateID = -1;
@@ -451,12 +538,8 @@ void handleNewMessages(int numNewMessages){
     String incoming_id=String(bot->messages[i].chat_id);
     String text=bot->messages[i].text;
 
-    // 일반적으로 offset 사용으로 이미 처리한 메시지는 안 들어옴
-    // 굳이 중복 체크 필요 없음.
-
     xSemaphoreTake(xMutex, portMAX_DELAY);
     if(incoming_id!=telegramChatId){
-      // messageneed를 사용
       pendingMessageChatId = incoming_id;
       pendingMessageText = "권한없음";
       messageneed = 1;
@@ -501,7 +584,6 @@ void handleNewMessages(int numNewMessages){
         messageneed = 1;
 
       } else {
-        // 명령어 처리
         if(text=="/start"){
           pendingMessageText="스위치 원격제어\n명령어:\n/on - 스위치ON(현재ON각도:"+String(servoOnAngle)+")\n/off - 스위치OFF(현재OFF각도:"+String(servoOffAngle)+")\n/set_on - ON각도 설정\n/set_off - OFF각도 설정\n/start - 메뉴 다시보기\n";
         } else if(text=="/on"){
@@ -597,13 +679,13 @@ void setup(){
   Serial.begin(115200);
   delay(1000);
   Serial.println("[Main] ESP32 스위치 컨트롤러 시작...");
-  Serial.println("[Main] AP Name: "+devstr);
 
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG,0);
   EEPROM.begin(sizeof(eprom_data));
 
   xMutex = xSemaphoreCreateMutex();
 
+  // WiFi + Telegram 봇 초기화
   init_wifi();
   myServo.attach(SERVO_PIN);
 
@@ -612,6 +694,7 @@ void setup(){
   desiredAngle = 100;
   xSemaphoreGive(xMutex);
 
+  // 통신 처리(텔레그램) 태스크
   xTaskCreatePinnedToCore(
     Comm_Task,
     "CommTask",
@@ -622,6 +705,7 @@ void setup(){
     0
   );
 
+  // 서보 제어 태스크
   xTaskCreatePinnedToCore(
     Servo_Task,
     "ServoTask",
