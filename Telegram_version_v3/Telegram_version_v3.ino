@@ -524,6 +524,8 @@ bool init_wifi() {
     wm.setConnectTimeout(30);
     wm.setConfigPortalTimeout(300);
 
+    wm.setCaptivePortalEnable(true);
+
     Serial.println("[WiFiManager] WiFiManager 포털 진입...");
     if (!wm.autoConnect(devstr.c_str())) {
       Serial.println("[WiFiManager] WiFiManager로 연결 실패. 재부팅...");
